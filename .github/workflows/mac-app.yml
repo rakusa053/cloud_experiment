@@ -1,0 +1,42 @@
+name: Mac app
+
+on:
+  push:
+    branches: [main, claude/current-configuration-hkmgga]
+    paths: ['mac-app/**', '.github/workflows/mac-app.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: bash mac-app/build.sh
+
+      - name: Package
+        working-directory: mac-app/build
+        run: ditto -c -k --keepParent "スクショギャラリー.app" ScreenshotGallery.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ScreenshotGallery
+          path: mac-app/build/ScreenshotGallery.zip
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=mac-app-latest
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" mac-app/build/ScreenshotGallery.zip --clobber
+          else
+            gh release create "$TAG" mac-app/build/ScreenshotGallery.zip \
+              --target "$GITHUB_SHA" \
+              --title "スクショギャラリー (Mac)" \
+              --notes "スクリーンショットをスマホのギャラリーのように見られる Mac アプリです。"
+          fi
