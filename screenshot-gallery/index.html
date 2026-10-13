@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>スクショギャラリー</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1c1c1e;
+    --muted: #8e8e93;
+    --bar: rgba(255, 255, 255, 0.85);
+    --line: #e5e5ea;
+    --accent: #007aff;
+    --tile: #f2f2f7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #000000;
+      --fg: #f2f2f7;
+      --muted: #8e8e93;
+      --bar: rgba(28, 28, 30, 0.85);
+      --line: #2c2c2e;
+      --tile: #1c1c1e;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); }
+  body { font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif; }
+  button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+
+  header {
+    position: sticky; top: 0; z-index: 5;
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 16px;
+    background: var(--bar);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 20px; margin: 0; flex: 1; }
+  header .count { color: var(--muted); font-size: 13px; }
+  .btn { color: var(--accent); padding: 6px 10px; border-radius: 8px; }
+  .btn:hover { background: var(--tile); }
+  .zoom { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  .zoom input { width: 90px; }
+
+  main { padding: 0 2px 40px; }
+  .section-title { font-size: 17px; font-weight: 700; margin: 20px 14px 8px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(var(--cell, 140px), 1fr));
+    gap: 2px;
+  }
+  .grid button { padding: 0; aspect-ratio: 1; background: var(--tile); overflow: hidden; }
+  .grid img { width: 100%; height: 100%; object-fit: cover; display: block; transition: opacity .2s; }
+  .grid button:hover img { opacity: .85; }
+
+  .empty {
+    max-width: 420px; margin: 18vh auto 0; padding: 0 16px; text-align: center; color: var(--muted);
+  }
+  .empty .big { font-size: 56px; }
+  .empty h2 { color: var(--fg); font-size: 22px; }
+  .primary {
+    margin-top: 16px; background: var(--accent); color: #fff;
+    padding: 12px 22px; border-radius: 12px; font-weight: 600;
+  }
+
+  /* 拡大ビュー */
+  #viewer {
+    position: fixed; inset: 0; z-index: 10; background: #000; color: #fff;
+    display: none; flex-direction: column; touch-action: none;
+  }
+  #viewer.open { display: flex; }
+  #viewer .top, #viewer .bottom {
+    display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+    background: rgba(0, 0, 0, 0.5); z-index: 1;
+  }
+  #viewer .top .info { flex: 1; text-align: center; font-size: 13px; }
+  #viewer .top .info small { display: block; color: #aaa; }
+  #viewer .bottom { justify-content: center; gap: 20px; }
+  #viewer .vbtn { color: #fff; padding: 8px 12px; border-radius: 8px; }
+  #viewer .vbtn:hover { background: rgba(255, 255, 255, 0.15); }
+  #stage { flex: 1; position: relative; overflow: hidden; }
+  #stage img {
+    position: absolute; top: 50%; left: 50%;
+    max-width: 100%; max-height: 100%;
+    transform-origin: center center; user-select: none; -webkit-user-drag: none;
+    will-change: transform;
+  }
+  .nav {
+    position: absolute; top: 50%; transform: translateY(-50%);
+    font-size: 34px; color: #fff; padding: 20px 14px; opacity: .6;
+  }
+  .nav:hover { opacity: 1; }
+  .nav.prev { left: 4px; }
+  .nav.next { right: 4px; }
+  .toast {
+    position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+    background: rgba(60, 60, 60, 0.9); color: #fff; padding: 8px 16px; border-radius: 20px;
+    font-size: 13px; z-index: 20; opacity: 0; transition: opacity .2s; pointer-events: none;
+  }
+  .toast.show { opacity: 1; }
+  @media (max-width: 600px) {
+    .zoom { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>スクリーンショット</h1>
+  <span class="count" id="count"></span>
+  <label class="zoom" title="サムネイルの大きさ">▫<input id="size" type="range" min="80" max="320" value="140">◻︎</label>
+  <button class="btn" id="pick">フォルダを選ぶ</button>
+</header>
+
+<main id="main">
+  <div class="empty" id="empty">
+    <div class="big">🖼️</div>
+    <h2>スクリーンショットをギャラリーで表示</h2>
+    <p>「フォルダを選ぶ」から、スクリーンショットが保存されているフォルダ（例: デスクトップの「スクリーンショット」）を選んでください。</p>
+    <p id="hint"></p>
+    <button class="primary" id="pick2">フォルダを選ぶ</button>
+  </div>
+</main>
+
+<div id="viewer" aria-modal="true" role="dialog">
+  <div class="top">
+    <button class="vbtn" id="close">✕ 閉じる</button>
+    <div class="info"><span id="vname"></span><small id="vdate"></small></div>
+    <span id="vpos" style="font-size:13px;color:#aaa;min-width:70px;text-align:right"></span>
+  </div>
+  <div id="stage">
+    <img id="vimg" alt="">
+    <button class="nav prev" id="prev" aria-label="前へ">‹</button>
+    <button class="nav next" id="next" aria-label="次へ">›</button>
+  </div>
+  <div class="bottom">
+    <button class="vbtn" id="copy">📋 コピー</button>
+    <button class="vbtn" id="fit">🔍 等倍 / 全体</button>
+    <button class="vbtn" id="save">⬇︎ 保存</button>
+  </div>
+</div>
+
+<input type="file" id="dirInput" webkitdirectory multiple hidden>
+<div class="toast" id="toast"></div>
+
+<script>
+const IMAGE_RE = /\.(png|jpe?g|gif|webp|heic|bmp|tiff?)$/i;
+const supportsFS = 'showDirectoryPicker' in window;
+const $ = id => document.getElementById(id);
+
+let photos = [];        // { name, date, file, url }
+let dirHandle = null;   // Chrome / Edge のみ
+let current = -1;
+
+/* ---------- フォルダ読み込み ---------- */
+
+async function readHandle(handle) {
+  const list = [];
+  for await (const entry of handle.values()) {
+    if (entry.kind === 'file' && IMAGE_RE.test(entry.name)) {
+      const file = await entry.getFile();
+      list.push(file);
+    }
+  }
+  return list;
+}
+
+function setFiles(files) {
+  const prev = new Map(photos.map(p => [p.name + ':' + p.date, p]));
+  const next = files
+    .filter(f => IMAGE_RE.test(f.name) && !f.name.startsWith('.'))
+    .map(f => {
+      const key = f.name + ':' + f.lastModified;
+      const reuse = prev.get(key);
+      if (reuse) { prev.delete(key); return reuse; }
+      return { name: f.name, date: f.lastModified, file: f, url: URL.createObjectURL(f) };
+    })
+    .sort((a, b) => b.date - a.date);
+  // 消えたファイルのURLを解放
+  for (const p of prev.values()) URL.revokeObjectURL(p.url);
+  const changed = next.length !== photos.length || next.some((p, i) => p !== photos[i]);
+  photos = next;
+  if (changed) render();
+}
+
+async function pickFolder() {
+  if (supportsFS) {
+    try {
+      dirHandle = await window.showDirectoryPicker({ id: 'screenshots', mode: 'read' });
+      await saveHandle(dirHandle);
+      setFiles(await readHandle(dirHandle));
+      startWatching();
+    } catch (e) {
+      if (e.name !== 'AbortError') toast('フォルダを開けませんでした');
+    }
+  } else {
+    $('dirInput').click();
+  }
+}
+
+$('dirInput').addEventListener('change', e => setFiles([...e.target.files]));
+$('pick').addEventListener('click', pickFolder);
+$('pick2').addEventListener('click', pickFolder);
+
+/* Chrome / Edge では数秒ごとにフォルダを確認し、新しいスクショを自動で追加 */
+let watchTimer = null;
+function startWatching() {
+  clearInterval(watchTimer);
+  watchTimer = setInterval(async () => {
+    if (!dirHandle || document.hidden) return;
+    try { setFiles(await readHandle(dirHandle)); } catch { /* 権限が切れた等 */ }
+  }, 3000);
+}
+
+/* 前回選んだフォルダを覚えておく（IndexedDB） */
+function db() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open('screenshot-gallery', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('kv');
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function saveHandle(h) {
+  try {
+    const d = await db();
+    d.transaction('kv', 'readwrite').objectStore('kv').put(h, 'dir');
+  } catch {}
+}
+async function loadHandle() {
+  try {
+    const d = await db();
+    return await new Promise(res => {
+      const r = d.transaction('kv').objectStore('kv').get('dir');
+      r.onsuccess = () => res(r.result || null);
+      r.onerror = () => res(null);
+    });
+  } catch { return null; }
+}
+
+async function restore() {
+  if (!supportsFS) {
+    $('hint').textContent = 'Safari では新しいスクショを見るたびにフォルダを選び直す必要があります。Chrome で開くと自動で更新されます。';
+    return;
+  }
+  const h = await loadHandle();
+  if (!h) return;
+  const perm = await h.queryPermission({ mode: 'read' });
+  if (perm === 'granted') {
+    dirHandle = h;
+    setFiles(await readHandle(h));
+    startWatching();
+  } else {
+    // 再許可にはクリックが必要
+    $('pick2').textContent = `「${h.name}」をもう一度開く`;
+    $('pick2').onclick = async () => {
+      if (await h.requestPermission({ mode: 'read' }) === 'granted') {
+        dirHandle = h;
+        setFiles(await readHandle(h));
+        startWatching();
+      }
+    };
+  }
+}
+
+/* ---------- 一覧表示 ---------- */
+
+function dayLabel(ts) {
+  const d = new Date(ts);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const that = new Date(d); that.setHours(0, 0, 0, 0);
+  const diff = Math.round((today - that) / 86400000);
+  if (diff === 0) return '今日';
+  if (diff === 1) return '昨日';
+  const sameYear = d.getFullYear() === today.getFullYear();
+  return d.toLocaleDateString('ja-JP', {
+    year: sameYear ? undefined : 'numeric', month: 'long', day: 'numeric', weekday: 'short'
+  });
+}
+
+function render() {
+  const main = $('main');
+  $('count').textContent = photos.length ? `${photos.length} 枚` : '';
+  if (!photos.length) {
+    if (dirHandle || $('dirInput').files.length) {
+      main.innerHTML = '<div class="empty"><div class="big">📭</div><h2>画像がありません</h2><p>このフォルダには画像ファイルが見つかりませんでした。</p></div>';
+    }
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  let lastLabel = null, grid = null;
+  photos.forEach((p, i) => {
+    const label = dayLabel(p.date);
+    if (label !== lastLabel) {
+      const h = document.createElement('div');
+      h.className = 'section-title';
+      h.textContent = label;
+      grid = document.createElement('div');
+      grid.className = 'grid';
+      frag.append(h, grid);
+      lastLabel = label;
+    }
+    const b = document.createElement('button');
+    b.title = p.name;
+    b.addEventListener('click', () => openViewer(i));
+    const img = document.createElement('img');
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    img.src = p.url;
+    img.alt = p.name;
+    b.append(img);
+    grid.append(b);
+  });
+  main.replaceChildren(frag);
+  if (current >= 0) {
+    current = Math.min(current, photos.length - 1);
+    showCurrent();
+  }
+}
+
+const sizeInput = $('size');
+function applySize() {
+  document.documentElement.style.setProperty('--cell', sizeInput.value + 'px');
+  try { localStorage.setItem('cell', sizeInput.value); } catch {}
+}
+try { const s = localStorage.getItem('cell'); if (s) sizeInput.value = s; } catch {}
+sizeInput.addEventListener('input', applySize);
+applySize();
+
+/* ---------- 拡大ビュー ---------- */
+
+const vimg = $('vimg');
+const stage = $('stage');
+let scale = 1, tx = 0, ty = 0;
+
+function applyTransform(animate) {
+  vimg.style.transition = animate ? 'transform .2s ease' : 'none';
+  vimg.style.transform = `translate(calc(-50% + ${tx}px), calc(-50% + ${ty}px)) scale(${scale})`;
+}
+function resetZoom(animate) { scale = 1; tx = 0; ty = 0; applyTransform(animate); }
+
+function openViewer(i) {
+  current = i;
+  $('viewer').classList.add('open');
+  document.body.style.overflow = 'hidden';
+  showCurrent();
+}
+function closeViewer() {
+  $('viewer').classList.remove('open');
+  document.body.style.overflow = '';
+  current = -1;
+}
+function showCurrent() {
+  const p = photos[current];
+  if (!p) return closeViewer();
+  vimg.src = p.url;
+  $('vname').textContent = p.name;
+  $('vdate').textContent = new Date(p.date).toLocaleString('ja-JP');
+  $('vpos').textContent = `${current + 1} / ${photos.length}`;
+  $('prev').style.visibility = current > 0 ? 'visible' : 'hidden';
+  $('next').style.visibility = current < photos.length - 1 ? 'visible' : 'hidden';
+  resetZoom(false);
+}
+function go(delta) {
+  const n = current + delta;
+  if (n < 0 || n >= photos.length) return resetZoom(true);
+  current = n;
+  showCurrent();
+}
+
+$('close').addEventListener('click', closeViewer);
+$('prev').addEventListener('click', e => { e.stopPropagation(); go(-1); });
+$('next').addEventListener('click', e => { e.stopPropagation(); go(1); });
+
+document.addEventListener('keydown', e => {
+  if (current < 0) return;
+  if (e.key === 'Escape') closeViewer();
+  else if (e.key === 'ArrowLeft') go(-1);
+  else if (e.key === 'ArrowRight') go(1);
+  else if (e.key === ' ') { e.preventDefault(); toggleZoom(); }
+});
+
+/* 等倍 ⇔ 画面に合わせる */
+function toggleZoom(cx, cy) {
+  if (scale > 1) return resetZoom(true);
+  const fitW = vimg.getBoundingClientRect().width;
+  const target = Math.max(2, vimg.naturalWidth / fitW);
+  zoomAt(target, cx, cy, true);
+}
+function zoomAt(newScale, cx, cy, animate) {
+  newScale = Math.min(Math.max(newScale, 1), 10);
+  const r = stage.getBoundingClientRect();
+  // クリック位置を中心に拡大
+  const px = (cx ?? r.left + r.width / 2) - (r.left + r.width / 2);
+  const py = (cy ?? r.top + r.height / 2) - (r.top + r.height / 2);
+  tx = px - (px - tx) * (newScale / scale);
+  ty = py - (py - ty) * (newScale / scale);
+  scale = newScale;
+  if (scale === 1) { tx = 0; ty = 0; }
+  applyTransform(animate);
+}
+$('fit').addEventListener('click', () => toggleZoom());
+stage.addEventListener('dblclick', e => toggleZoom(e.clientX, e.clientY));
+
+/* トラックパッドのピンチ（ctrl+ホイール）と2本指スクロール */
+stage.addEventListener('wheel', e => {
+  e.preventDefault();
+  if (e.ctrlKey) {
+    zoomAt(scale * Math.exp(-e.deltaY / 100), e.clientX, e.clientY, false);
+  } else if (scale > 1) {
+    tx -= e.deltaX; ty -= e.deltaY; applyTransform(false);
+  } else if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+    swipeAccum += e.deltaX;
+    clearTimeout(swipeTimer);
+    swipeTimer = setTimeout(() => (swipeAccum = 0), 200);
+    if (Math.abs(swipeAccum) > 120) { go(swipeAccum > 0 ? 1 : -1); swipeAccum = 0; }
+  }
+}, { passive: false });
+let swipeAccum = 0, swipeTimer = null;
+
+/* ドラッグ・スワイプ・タッチのピンチ */
+const pointers = new Map();
+let start = null;
+stage.addEventListener('pointerdown', e => {
+  if (e.target.closest('.nav')) return;
+  stage.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  start = { x: e.clientX, y: e.clientY, tx, ty, scale, dist: pinchDist() };
+});
+stage.addEventListener('pointermove', e => {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 2) {
+    const d = pinchDist();
+    if (!start.dist) { start.dist = d; start.scale = scale; return; }
+    const pts = [...pointers.values()];
+    zoomAt(start.scale * d / start.dist, (pts[0].x + pts[1].x) / 2, (pts[0].y + pts[1].y) / 2, false);
+    return;
+  }
+  const dx = e.clientX - start.x, dy = e.clientY - start.y;
+  if (scale > 1) { tx = start.tx + dx; ty = start.ty + dy; }
+  else { tx = dx; ty = 0; }
+  applyTransform(false);
+});
+function endPointer(e) {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.delete(e.pointerId);
+  if (pointers.size > 0) { start.dist = 0; return; }
+  if (scale === 1) {
+    const dx = e.clientX - start.x;
+    if (dx < -60) go(1);
+    else if (dx > 60) go(-1);
+    else resetZoom(true);
+  }
+}
+stage.addEventListener('pointerup', endPointer);
+stage.addEventListener('pointercancel', endPointer);
+function pinchDist() {
+  if (pointers.size < 2) return 0;
+  const [a, b] = [...pointers.values()];
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+/* コピー・保存 */
+$('copy').addEventListener('click', async () => {
+  const p = photos[current];
+  try {
+    let blob = p.file;
+    if (blob.type !== 'image/png') blob = await toPng(p.url);
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+    toast('クリップボードにコピーしました');
+  } catch {
+    toast('コピーできませんでした');
+  }
+});
+function toPng(url) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth; c.height = img.naturalHeight;
+      c.getContext('2d').drawImage(img, 0, 0);
+      c.toBlob(b => (b ? res(b) : rej()), 'image/png');
+    };
+    img.onerror = rej;
+    img.src = url;
+  });
+}
+$('save').addEventListener('click', () => {
+  const p = photos[current];
+  const a = document.createElement('a');
+  a.href = p.url; a.download = p.name; a.click();
+});
+
+let toastTimer;
+function toast(msg) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 1800);
+}
+
+restore();
+</script>
+</body>
+</html>
